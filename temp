@@ -4,26 +4,54 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include "rtspClient.h"
 
-using std::cout;
-using std::endl;
-
-
+string url;
+string ip;
+int port;
 
 int main(int argc, char *argv[])
 {
-	RtspClient rtspClient("rtsp://172.20.100.168:556/liveshow/193?bitrate=1200K");
-	
-    rtspClient.DoOPTIONS();
+    if (argc != 4)
+    {
+        return -1;
+    }        
     
-	rtspClient.DoDESCRIBE();
+    ErrorType result;
+    
+    url = argv[1];
+    ip = argv[2];
+    port = atoi(argv[3]);
+    
+    //"rtsp://172.20.100.168:556/liveshow/193?bitrate=1200K";
+	RtspClient rtspClient(url);
 
-	rtspClient.ParseSDP();
+    result = rtspClient.SendOptionsCommand();
+    if (result != RTSP_NO_ERROR)
+    {
+        return RTSP_INVALID_URI;
+    }
+    
+	result = rtspClient.SendDescribeCommand();
+    if (result != RTSP_NO_ERROR)
+    {
+        return RTSP_INVALID_URI;
+    }
 
-	rtspClient.DoSETUP();
+	//rtspClient.ParseSDP();
 
-	rtspClient.DoPLAY();
+	result = rtspClient.SendSetupCommand();
+    if (result != RTSP_NO_ERROR)
+    {
+        return RTSP_INVALID_URI;
+    }
+
+	result = rtspClient.SendPlayCommand();
+    if (result != RTSP_NO_ERROR)
+    {
+        return RTSP_INVALID_URI;
+    }
 
     while (1)
     {
@@ -50,118 +78,9 @@ int main(int argc, char *argv[])
 		printf("recv %u\n", size);
 	}
 */
-	rtspClient.DoTEARDOWN();
+	rtspClient.SendTeardownCommand();
 	return 0;
 }
-
-
-#ifndef __RTSP_CLIENT_H__
-#define __RTSP_CLIENT_H__
-
-#include <stdio.h>
-#include <string>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
-using namespace std;
-
-#define PORT_RTSP 				554
-#define VERSION_RTSP 			"1.0"
-#define SELECT_TIMEOUT_SEC 		1
-#define SELECT_TIMEOUT_USEC 	0
-
-#define CHECK_OK 				1
-#define CHECK_ERROR				0
-
-#define TRANS_OK 				1
-#define TRANS_ERROR 			0
-
-#define RECV_BUF_SIZE 			8192
-
-enum SessionType {
-    VIDEO_SESSION = 0, 
-    AUDIO_SESSION
-};
-
-enum ErrorType {
-    RTSP_NO_ERROR = 0,
-    RTSP_INVALID_URI,
-	RTSP_SEND_ERROR, 
-	RTSP_RECV_ERROR,
-	RTSP_INVALID_MEDIA_SESSION,
-	RTSP_RESPONSE_BLANK,
-	RTSP_RESPONSE_200,
-	RTSP_RESPONSE_400,
-	RTSP_RESPONSE_401,
-	RTSP_RESPONSE_404,
-	RTSP_RESPONSE_40X,
-	RTSP_RESPONSE_500,
-	RTSP_RESPONSE_501,
-	RTSP_RESPONSE_50X,
-    RTSP_UNKNOWN_ERROR
-};
-
-typedef struct Buffer_t {
-	uint8_t *buff;
-	size_t size;
-} Buffer_t;
-
-class RtspClient
-{
-public:
-    RtspClient(string uri);
-    ~RtspClient();
-    
-    ErrorType DoOPTIONS();
-    ErrorType DoDESCRIBE();
-    ErrorType DoSETUP();
-    ErrorType DoPLAY();
-    ErrorType DoTEARDOWN();
-
-    bool   ParseSDP();
-
-protected:
-    int CreateTcpSockfd(string uri = "");
-    
-    int CheckSockWritable(int sockfd, struct timeval * tval = NULL);
-    int CheckSockReadable(int sockfd, struct timeval * tval = NULL);
-    int SendRTSP(int fd, const char *msg, size_t size);
-    int SendRTSP(int fd, string msg);
-    int RecvRTSP(int fd, char *msg, size_t max_line);
-    int RecvRTSP(int fd, string *msg);
-
-    int RecvSDP(int sockfd, char * msg, size_t size);
-    int RecvSDP(int sockfd, string * msg = NULL); 
-    int Close(int sockfd);
-    
-private:    
-    string ParseSessionID(string ResponseOfSETUP = "");
-    string ParseError(ErrorType et);
-	string GetIp(const string &uri);
-	int    GetPort(const string &uri);
-
-protected:
-    unsigned int m_nRtspCseq;
-    int    m_nRtspFd;
-    int    m_nProtocol;
-    string m_strRtspUri;
-    string m_strCtrlUri;
-    string RtspIP;
-    string m_strRtspResp;
-    string m_strSdp;
-    string m_strSessionId;
-    
-    bool CmdPLAYSent;
-
-    // uint8_t AudioBuffer[BUFSIZ];
-    // uint8_t VideoBuffer[BUFSIZ];
-    Buffer_t m_audioBuffer;
-    Buffer_t m_videoBuffer;
-    pthread_t pid;
-};
-
-#endif
-
 
 #include <sstream>
 #include <iostream>
@@ -177,6 +96,9 @@ protected:
 #include <fcntl.h>
 #include <errno.h>
 #include "rtspClient.h"
+
+extern string ip;
+extern int port;
 
 ssize_t	ReadLine(int fd, void *vptr, size_t maxlen)
 {   
@@ -233,47 +155,132 @@ ssize_t Readn(int fd, void *vptr, size_t n)
 }
 /* end readn */
 
+#pragma pack(1)
 
+typedef struct TcpHeaderTag
+{
+    char flag;
+    char channel;
+    unsigned short len;
+}STcpHeader;
+
+#pragma pack()
 
 void *rtp_thread(void *arg)
 {
-    int nFd = *(int *)arg;
+    int sockfd;  
+    struct sockaddr_in destAddr;  
+  
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)  
+    {    
+        return NULL;  
+    }
 
+    printf("udp sockfd:%d\n", sockfd);
+  
+    bzero(&destAddr, sizeof(destAddr));  
+    destAddr.sin_family = AF_INET;  
+    destAddr.sin_port = htons(port);  
+    inet_pton(AF_INET, ip.c_str(), &destAddr.sin_addr);     
+    
+    int nFd = *(int *)arg;
     int epoll_fd;
 	struct epoll_event ev, events[128];
 
 	epoll_fd = epoll_create(1);
 	ev.data.fd = nFd;
-	ev.events = EPOLLIN | EPOLLET;
+	ev.events = EPOLLIN;
 	epoll_ctl(epoll_fd, EPOLL_CTL_ADD, nFd, &ev);
 
     char buffer[8192];
-    int buff_size = 8192;
+    STcpHeader tcpHeader;
+    int nBuffSize = 8192;
     int nReadSize = 0;
+    int nRtpSize = 0;
+    char *pBuffer = buffer;
+    
     while (1) 
 	{
+        //printf("before epoll_wait\n");
         int nfds = epoll_wait(epoll_fd, events, 128, -1);
-        
+        //printf("after epoll_wait\n");
 		if (-1 == nfds || nfds != 1)
 			return NULL;
 
-        if (events[i].events & EPOLLIN)
+        if (events[0].events & EPOLLIN)
         {
-            nReadSize = read(nFd, buffer, buff_size);
-            printf("%d\n", nReadSize);
+            //printf("before read buffer-size:%d, buffer-used:%d\n", nBuffSize, pBuffer - buffer);
+            
+            nReadSize = read(nFd, pBuffer, nBuffSize);
+            
+            //printf("total read:%d\n", nReadSize);
+
+            nReadSize += pBuffer - buffer;
+            if (nReadSize > 0)
+            {
+                char *p = buffer;
+                
+                while (nReadSize >= 4)
+                {
+                    memcpy(&tcpHeader, p, 4);
+                    nRtpSize = ntohs(tcpHeader.len); 
+                    
+                    //printf("tcp header: %x %d %d\n", tcpHeader.flag, tcpHeader.channel, nRtpSize);
+                    
+                    nReadSize -= 4;
+                    //printf("1-unread len:%d\n", nReadSize);
+
+                    if (nReadSize >= nRtpSize)
+                    {
+                        int len = sendto(sockfd, p + 4 + 12, nRtpSize - 12, 0, (struct sockaddr *)&destAddr, sizeof(destAddr));
+
+                        //printf("sendto %d\n", len);
+                        
+                        p += 4 + nRtpSize;
+                        pBuffer = p;
+                        nReadSize -= nRtpSize;
+                        
+                        printf("sendto:%d, left:%d\n", len, nReadSize);
+                    }
+                    else
+                    {
+                        nReadSize += 4;
+                        break;
+                    }
+                }
+                
+                if (nReadSize > 0)
+                {
+                    //printf("2-unread len:%d\n", nReadSize);
+                    memcpy(buffer, pBuffer, nReadSize);
+                    pBuffer = buffer;
+                    pBuffer += nReadSize;
+                    //printf("1------------>debug nReadSize:%d, buffer-size:%d\n", nReadSize, nBuffSize);
+                    nBuffSize -= nReadSize;
+                    //printf("2------------>debug nReadSize:%d, buffer-size:%d\n", nReadSize, nBuffSize);
+                }
+                else
+                {
+                    nBuffSize = 8192;
+                    pBuffer = buffer;
+                }
+            }
+            else
+            {
+                return NULL;
+            }
+
         }
         
-        
-
 	}
 }
 
-RtspClient::RtspClient(string uri)
+RtspClient::RtspClient(string url)
     : m_nRtspCseq(0)
     , m_nRtspFd(-1)
     , m_nProtocol(1)
-    , m_strRtspUri(uri)
-    , m_strCtrlUri("")
+    , m_strRtspUrl(url)
+    , m_strCtrlUrl("")
     , m_strRtspResp("")
     , m_strSdp("")
     , m_strSessionId("")
@@ -302,14 +309,19 @@ RtspClient::~RtspClient()
 	}
 }
 
-ErrorType RtspClient::DoOPTIONS()
+ErrorType RtspClient::SendOptionsCommand()
 {
-	m_nRtspFd = CreateTcpSockfd(m_strRtspUri);
-	if(m_nRtspFd < 0) return RTSP_INVALID_URI;
+    ErrorType result;
+    result = OpenConnection(m_strRtspUrl);
+    
+	if (result != RTSP_NO_ERROR)
+    {
+        return RTSP_INVALID_URI;
+    }
 
 	string Cmd("OPTIONS");
 	stringstream Msg("");
-	Msg << Cmd << " " << m_strRtspUri << " " << "RTSP/" << VERSION_RTSP << "\r\n";
+	Msg << Cmd << " " << m_strRtspUrl << " " << "RTSP/" << VERSION_RTSP << "\r\n";
 	Msg << "CSeq: " << ++m_nRtspCseq << "\r\n";
 	Msg << "\r\n";
 
@@ -328,11 +340,11 @@ ErrorType RtspClient::DoOPTIONS()
 	return RTSP_NO_ERROR;
 }
 
-ErrorType RtspClient::DoDESCRIBE()
+ErrorType RtspClient::SendDescribeCommand()
 {
 	string Cmd("DESCRIBE");
 	stringstream Msg("");
-	Msg << Cmd << " " << m_strRtspUri << " " << "RTSP/" << VERSION_RTSP << "\r\n";
+	Msg << Cmd << " " << m_strRtspUrl << " " << "RTSP/" << VERSION_RTSP << "\r\n";
 	Msg << "CSeq: " << ++m_nRtspCseq << "\r\n";
 	Msg << "\r\n";
 
@@ -369,11 +381,11 @@ ErrorType RtspClient::DoDESCRIBE()
 	return RTSP_NO_ERROR;
 }
 
-ErrorType RtspClient::DoSETUP()
+ErrorType RtspClient::SendSetupCommand()
 {
 	string Cmd("SETUP");
 	stringstream Msg("");
-	Msg << Cmd << " " << m_strCtrlUri << " " << "RTSP/" << VERSION_RTSP << "\r\n";
+	Msg << Cmd << " " << m_strCtrlUrl << " " << "RTSP/" << VERSION_RTSP << "\r\n";
 	Msg << "Transport:" << " " << "RTP/AVP/TCP;";
 	Msg << "unicast;" << "interleaved=" << "0-1" << "\r\n";
 	Msg << "CSeq: " << ++m_nRtspCseq << "\r\n";
@@ -395,11 +407,11 @@ ErrorType RtspClient::DoSETUP()
 	return RTSP_NO_ERROR;
 }
 
-ErrorType RtspClient::DoPLAY()
+ErrorType RtspClient::SendPlayCommand()
 {
 	string Cmd("PLAY");
 	stringstream Msg("");
-	Msg << Cmd << " " << m_strCtrlUri << " " << "RTSP/" << VERSION_RTSP << "\r\n";
+	Msg << Cmd << " " << m_strCtrlUrl << " " << "RTSP/" << VERSION_RTSP << "\r\n";
 	Msg << "CSeq: " << ++m_nRtspCseq << "\r\n";
     Msg << "Range: npt=0.000-" << "\r\n";
 	Msg << "Session: " << m_strSessionId << "\r\n";
@@ -431,11 +443,11 @@ ErrorType RtspClient::DoPLAY()
 	return RTSP_NO_ERROR;
 }
 
-ErrorType RtspClient::DoTEARDOWN()
+ErrorType RtspClient::SendTeardownCommand()
 {	
 	string Cmd("TEARDOWN");
 	stringstream Msg("");
-	Msg << Cmd << " " << m_strCtrlUri << " " << "RTSP/" << VERSION_RTSP << "\r\n";
+	Msg << Cmd << " " << m_strCtrlUrl << " " << "RTSP/" << VERSION_RTSP << "\r\n";
 	Msg << "CSeq: " << ++m_nRtspCseq << "\r\n";
 	Msg << "Session: " << m_strSessionId << "\r\n";
 	Msg << "\r\n";
@@ -451,6 +463,90 @@ ErrorType RtspClient::DoTEARDOWN()
 	}
     
 	return RTSP_NO_ERROR;
+}
+
+bool RtspClient::ParseRtspUrl(const char *url, char *ip, int &port)
+{
+    bool result = false;
+    
+    do 
+    {
+        // Parse the URL as "rtsp://[<username>[:<password>]@]<server-address-or-name>[:<port>][/<stream-name>]"
+        const char *prefix = "rtsp://";
+        unsigned const prefixLength = 7;
+        if (strncmp(url, prefix, prefixLength) != 0) 
+        {
+            break;
+        }
+        
+        printf("%s\n", url);
+        
+        const char *ctrlFlag = strstr(url, "?");
+        if (ctrlFlag == NULL)
+        {
+            break;
+        }
+        
+        char ctrl[128];
+        memset(ctrl, 0, sizeof(ctrl));
+        memcpy(ctrl, url, ctrlFlag - url);
+        m_strCtrlUrl = ctrl;
+        
+        printf("%s\n", m_strCtrlUrl.c_str());
+        
+        const char *from = &url[prefixLength];
+       
+        const char *userPassFlag = strstr(from, "&");
+        if (userPassFlag != NULL)
+        {
+            int skip = userPassFlag - from + 1;
+            from += skip;
+        }
+        
+        const char *ipPortFlag = strstr(from, "/");
+        if (ipPortFlag == NULL)
+        {
+            break;
+        }
+        
+        char buffer[32];
+        memset(buffer, 0, sizeof(buffer));
+        int ipPortlen = ipPortFlag - from;
+        if (ipPortlen > sizeof(buffer))
+        {
+            break;
+        }
+        
+        memcpy(buffer, from, ipPortlen);
+        
+        printf("%s\n", buffer);
+        
+        const char *portFlag = strstr(buffer, ":");
+        if (portFlag == NULL)
+        {
+            memcpy(ip, buffer, strlen(buffer));
+            port = 0;
+            result = true;
+            break;
+        }
+        
+        int ipLen = portFlag - buffer;
+        memcpy(ip, buffer, ipLen);
+        ip[ipLen] = '\0';
+        
+        printf("ip:%s\n", ip);
+        
+        char szPort[8];
+        portFlag += 1;
+        int portLen = strlen(buffer) - ipLen - 1;
+        memcpy(szPort, portFlag, portLen);
+        szPort[portLen] = '\0';
+        port = atoi(szPort);
+        result = true;
+        printf("port:%d\n", port);
+  } while (0);
+
+  return result;
 }
 
 bool RtspClient::ParseSDP()
@@ -469,12 +565,12 @@ bool RtspClient::ParseSDP()
     char *pEnd = strstr(p, "\r\n");
     memset(buff, 0, 128);
     memcpy(buff, p, pEnd - p);
-    m_strCtrlUri = buff;
+    m_strCtrlUrl = buff;
     
-    printf("%s\n", m_strCtrlUri.c_str());
+    printf("%s\n", m_strCtrlUrl.c_str());
     */
     
-    m_strCtrlUri = "rtsp://172.20.100.168:556/liveshow/193";
+    m_strCtrlUrl = "rtsp://172.20.100.168:556/liveshow/193";
     return true;
 }
 
@@ -534,52 +630,53 @@ string RtspClient::ParseError(ErrorType et)
 	return ErrStr;
 }
 
-/*****************/
-/* Tools Methods */
-int RtspClient::CreateTcpSockfd(string uri)
+ErrorType RtspClient::OpenConnection(string url)
 {
-	int sockfd = -1;
+    char ip[32];
+    int port = 0;
     int sockstatus = -1;
 	struct sockaddr_in srvAddr;
-	
-	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("Socket created error");
-		return sockfd;
-	}
-
-	sockstatus = fcntl(sockfd, F_GETFL, 0);
-	fcntl(sockfd, F_SETFL, sockstatus | O_NONBLOCK);
-
-	// Connect to server
-	bzero(&srvAddr, sizeof(srvAddr));
-	srvAddr.sin_family = AF_INET;
-	srvAddr.sin_port = htons(GetPort(uri));
-	srvAddr.sin_addr.s_addr = inet_addr(GetIp(uri).c_str());
-
-	if(connect(sockfd, (struct sockaddr *)&srvAddr, sizeof(srvAddr)) < 0 && errno != EINPROGRESS) {
-		perror("connect error");
-		close(sockfd);
-		sockfd = -1;
-		return sockfd;
-	}
+    ErrorType result = RTSP_NO_ERROR;
     
-	if(!CheckSockWritable(sockfd)) {
-		sockfd = -1;
-		return sockfd;
-	}
+    do
+    {
+        if (!ParseRtspUrl(url.c_str(), ip, port))
+        {
+            result = RTSP_INVALID_URI;
+            break;
+        }
+        
+        if((m_nRtspFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        {
+            result = RTSP_INTERNALE_ERROR;
+            break;
+        }
 
-	return sockfd;
-}
+        sockstatus = fcntl(m_nRtspFd, F_GETFL, 0);
+        fcntl(m_nRtspFd, F_SETFL, sockstatus | O_NONBLOCK);
 
-string RtspClient::GetIp(const string &uri)
-{
-    string strIp = "172.20.100.168";
-	return strIp;
-}
+        bzero(&srvAddr, sizeof(srvAddr));
+        srvAddr.sin_family = AF_INET;
+        srvAddr.sin_port = htons(port);
+        srvAddr.sin_addr.s_addr = inet_addr(ip);
 
-int RtspClient::GetPort(const string &uri)
-{
-	return 556;
+        if(connect(m_nRtspFd, (struct sockaddr *)&srvAddr, sizeof(srvAddr)) < 0 && errno != EINPROGRESS) 
+        {
+            result = RTSP_INTERNALE_ERROR;
+            close(m_nRtspFd);
+            m_nRtspFd = -1;
+            break;
+        }
+
+        if(!CheckSockWritable(m_nRtspFd)) {
+            m_nRtspFd = -1;
+            break;
+        }
+        
+        result = RTSP_NO_ERROR;
+    } while (0);
+	
+    return result;
 }
 
 /*********************/
@@ -788,3 +885,109 @@ string RtspClient::ParseSessionID(string strResp)
     
 	return strId;
 }
+
+#ifndef __RTSP_CLIENT_H__
+#define __RTSP_CLIENT_H__
+
+#include <stdio.h>
+#include <string>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+using namespace std;
+
+#define PORT_RTSP 				554
+#define VERSION_RTSP 			"1.0"
+#define SELECT_TIMEOUT_SEC 		1
+#define SELECT_TIMEOUT_USEC 	0
+
+#define CHECK_OK 				1
+#define CHECK_ERROR				0
+
+#define TRANS_OK 				1
+#define TRANS_ERROR 			0
+
+#define RECV_BUF_SIZE 			8192
+
+enum SessionType {
+    VIDEO_SESSION = 0, 
+    AUDIO_SESSION
+};
+
+enum ErrorType {
+    RTSP_NO_ERROR = 0,
+    RTSP_INTERNALE_ERROR,
+    RTSP_INVALID_URI,
+	RTSP_SEND_ERROR, 
+	RTSP_RECV_ERROR,
+	RTSP_INVALID_MEDIA_SESSION,
+	RTSP_RESPONSE_BLANK,
+	RTSP_RESPONSE_200,
+	RTSP_RESPONSE_400,
+	RTSP_RESPONSE_401,
+	RTSP_RESPONSE_404,
+	RTSP_RESPONSE_40X,
+	RTSP_RESPONSE_500,
+	RTSP_RESPONSE_501,
+	RTSP_RESPONSE_50X,
+    RTSP_UNKNOWN_ERROR
+};
+
+typedef struct Buffer_t {
+	uint8_t *buff;
+	size_t size;
+} Buffer_t;
+
+class RtspClient
+{
+public:
+    RtspClient(string uri);
+    ~RtspClient();
+    
+    ErrorType SendOptionsCommand();
+    ErrorType SendDescribeCommand();
+    ErrorType SendSetupCommand();
+    ErrorType SendPlayCommand();
+    ErrorType SendTeardownCommand();
+
+    bool   ParseRtspUrl(const char *url, char *ip, int &port);
+    bool   ParseSDP();
+
+protected:
+    ErrorType OpenConnection(string uri = "");
+    int SendRTSP(int fd, const char *msg, size_t size);
+    int SendRTSP(int fd, string msg);
+    int RecvRTSP(int fd, char *msg, size_t max_line);
+    int RecvRTSP(int fd, string *msg);
+    int CheckSockWritable(int sockfd, struct timeval * tval = NULL);
+    int CheckSockReadable(int sockfd, struct timeval * tval = NULL);
+
+    int RecvSDP(int sockfd, char * msg, size_t size);
+    int RecvSDP(int sockfd, string * msg = NULL); 
+    int Close(int sockfd);
+    
+private:    
+    string ParseSessionID(string ResponseOfSETUP = "");
+    string ParseError(ErrorType et);
+
+protected:
+    unsigned int m_nRtspCseq;
+    int    m_nRtspFd;
+    int    m_nProtocol;
+    string m_strRtspUrl;
+    string m_strCtrlUrl;
+    string RtspIP;
+    string m_strRtspResp;
+    string m_strSdp;
+    string m_strSessionId;
+    
+    bool CmdPLAYSent;
+
+    // uint8_t AudioBuffer[BUFSIZ];
+    // uint8_t VideoBuffer[BUFSIZ];
+    Buffer_t m_audioBuffer;
+    Buffer_t m_videoBuffer;
+    pthread_t pid;
+};
+
+#endif
