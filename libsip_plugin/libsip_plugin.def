@@ -1,0 +1,34 @@
+; libsip_plugin.def : 声明 DLL 的模块参数。
+
+LIBRARY      "libsip_plugin"
+
+EXPORTS
+    ; 此处可以是显式导出
+	AVCON_MPX_Startup
+	AVCON_MPX_Cleanup
+	AVCON_MPX_MtsStatusChanged
+	AVCON_MPX_PtzControl
+	AVCON_MPX_StartRecord
+	AVCON_MPX_StopRecord
+	AVCON_MPX_StartTalk
+	AVCON_MPX_StopTalk
+	AVCON_MPX_StartListenAlarm
+	AVCON_MPX_StopListenAlarm
+	AVCON_MPX_OnDeviceOnline
+	AVCON_MPX_OnDeviceOffline
+	AVCON_MPX_OnChannelOnline
+	AVCON_MPX_OnChannelOffline
+	AVCON_MPX_GetLastError
+	AVCON_MPX_GetAudioInfo
+	AVCON_MPX_SetAudioInfo
+	AVCON_MPX_GetVideoInfo
+	AVCON_MPX_SetVideoInfo
+	AVCON_MPX_GetPtzInfo
+	AVCON_MPX_SetPtzInfo
+	AVCON_MPX_TalkChanged
+	AVCON_MPX_SwitchMatrixVideoSource
+	AVCON_MPX_SendMatrixAllSourceName
+	AVCON_MPX_ToolsOperator
+	AVCON_MPX_GetMonDeviceLoginInfo
+	AVCON_MPX_OnDeviceBasicInfo
+    AVCON_MPX_OnGetDevDiskInfo
