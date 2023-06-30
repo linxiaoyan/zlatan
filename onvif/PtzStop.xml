@@ -1,1 +1,0 @@
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Header>%s</s:Header><s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><Stop xmlns="http://www.onvif.org/ver20/ptz/wsdl"><ProfileToken>%s</ProfileToken><PanTilt>true</PanTilt><Zoom>true</Zoom></Stop></s:Body></s:Envelope>
